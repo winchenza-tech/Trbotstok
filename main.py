@@ -1,6 +1,6 @@
 import os
 import logging
-import requests
+import cloudscraper
 from bs4 import BeautifulSoup
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -8,25 +8,30 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 # Loglama ayarları
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# --- VERİ TUTMA ---
 izlenen_urunler = {}
 urun_sayaci = 1
 
 def trendyol_stok_kontrol(url):
-    """Trendyol linkini kontrol eder, 'Sepete Ekle' butonu varsa True döner."""
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
-    }
+    scraper = cloudscraper.create_scraper(browser={
+        'browser': 'chrome',
+        'platform': 'windows',
+        'desktop': True
+    })
     
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        response = scraper.get(url, timeout=15)
+        
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, 'html.parser')
-            buton = soup.find('div', class_='add-to-basket-button-text')
             
-            # .lower() kullanarak büyük/küçük harf sorununu ortadan kaldırıyoruz
+            buton = soup.find('div', class_='add-to-basket-button-text')
             if buton and "sepete ekle" in buton.text.lower():
                 return True
+                
+            buton_alt = soup.find('button', class_='add-to-basket')
+            if buton_alt and "sepete ekle" in buton_alt.text.lower():
+                return True
+                
     except Exception as e:
         logging.error(f"Stok kontrol hatası: {e}")
         
@@ -36,11 +41,12 @@ def trendyol_stok_kontrol(url):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mesaj = (
-        "Zenithstok kontrol botuna hoş geldiniz! 🛒\n\n"
-        "Komutlar:\n"
-        "/ekle <link> - Kontrol listesine ürğn ekler.\n"
-        "/listem - Takipteki ürünleri gösterir.\n"
-        "/listedencikar <numara> - Ürünü takipten çıkarır."
+        "Sisteme bağlandım. Ben StockFox, arka plandaki gözünüm.\n"
+        "Kurallar basit, komutları eksiksiz gir:\n\n"
+        "/ekle <link> - Takip edilecek hedefi belirle.\n"
+        "/listem - Radarımızdaki hedefleri gör.\n"
+        "/listedencikar <no> - Gereksiz hedefleri sistemden temizle.\n"
+        "/kontrol - Aciliyet durumunda manuel tarama başlat."
     )
     await update.message.reply_text(mesaj)
 
@@ -49,7 +55,7 @@ async def ekle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
     
     if not context.args:
-        await update.message.reply_text("Lütfen bir link girin.\nDoğru kullanım: `/ekle https://trendyol.com/...`")
+        await update.message.reply_text("Eksik parametre. Bana net bir hedef linki ver.\nÖrnek: `/ekle https://trendyol.com/...`")
         return
         
     url = context.args[0]
@@ -58,7 +64,7 @@ async def ekle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         izlenen_urunler[chat_id] = {}
         
     izlenen_urunler[chat_id][urun_sayaci] = url
-    await update.message.reply_text(f"✅ Ürün takibe alındı!\nÜrün Numarası: {urun_sayaci}\n2 saatte bir stok kontrolü yapılacaktır.")
+    await update.message.reply_text(f"✅ Hedef listeye eklendi. ID: {urun_sayaci}.\nBen arka planda işimi yaparken sen kendi işine bak. Gelişme olursa haber vereceğim.")
     urun_sayaci += 1
 
 async def listem(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -66,12 +72,12 @@ async def listem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     urunler = izlenen_urunler.get(chat_id, {})
     
     if not urunler:
-        await update.message.reply_text("Şu anda takip ettiğiniz bir ürün bulunmuyor.")
+        await update.message.reply_text("Sistemde takip edilen hiçbir hedef yok. Önce bir görev ver.")
         return
         
-    mesaj = "📦 Stoğa girmesi beklenen ürünler:\n\n"
+    mesaj = "📦 **Radarımızdaki Aktif Hedefler:**\n\n"
     for uid, url in urunler.items():
-        mesaj += f"• No: {uid} | [Ürün Linki]({url})\n"
+        mesaj += f"• **ID: {uid}** | [Hedefe Git]({url})\n"
         
     await update.message.reply_text(mesaj, parse_mode="Markdown", disable_web_page_preview=True)
 
@@ -79,25 +85,54 @@ async def listedencikar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
     
     if not context.args:
-        await update.message.reply_text("çıkarmak istediğiniz ürünün numarasını gir.\nMal olma doğru kullanım: `/listedencikar 1`")
+        await update.message.reply_text("Hatalı kullanım. İptal edilecek hedefin ID numarasını gir.\nÖrnek: `/listedencikar 1`")
         return
         
     try:
         uid = int(context.args[0])
     except ValueError:
-        await update.message.reply_text("Ürün numarası sadece sayılardan oluşmalıdır!")
+        await update.message.reply_text("Sadece rakam kullan. Basit komutları yanlış girme.")
         return
 
     if chat_id in izlenen_urunler and uid in izlenen_urunler[chat_id]:
         del izlenen_urunler[chat_id][uid]
-        await update.message.reply_text(f"🗑️ {uid} numaralı ürün listeden çıkarıldı.")
+        await update.message.reply_text(f"🗑️ ID {uid} sistemden kalıcı olarak silindi.")
     else:
-        await update.message.reply_text("Bu numaraya ait takip edilen bir ürün bulunamadı.")
+        await update.message.reply_text("Böyle bir ID sistemde yok. Verilerini kontrol edip tekrar dene.")
 
-# --- ZAMANLANMIŞ GÖREV ---
+# --- MANUEL KONTROL KOMUTU ---
+
+async def manuel_kontrol(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.message.chat_id
+    urunler = izlenen_urunler.get(chat_id, {})
+    
+    if not urunler:
+        await update.message.reply_text("Kontrol edilecek veri yok. Önce hedef ekle.")
+        return
+        
+    await update.message.reply_text("⏳ Sistem taranıyor. Bekle.")
+    
+    silinecek_urunler = []
+    stokta_bulunan = 0
+    
+    for uid, url in urunler.items():
+        stokta_mi = trendyol_stok_kontrol(url)
+        
+        if stokta_mi:
+            mesaj = f"🚨 HEDEF TESPİT EDİLDİ 🚨\n\nStok aktif. Fırsatı kaçırma, koş bayıl paranı.\n👉 [Satın Al]({url})"
+            await context.bot.send_message(chat_id=chat_id, text=mesaj, parse_mode="Markdown")
+            silinecek_urunler.append(uid)
+            stokta_bulunan += 1
+            
+    for uid in silinecek_urunler:
+        del izlenen_urunler[chat_id][uid]
+        
+    if stokta_bulunan == 0:
+        await update.message.reply_text("Mevcut hedeflerde stok yok. Beklemeye devam et.")
+
+# --- ZAMANLANMIŞ GÖREV (OTOMATİK KONTROL) ---
 
 async def periyodik_kontrol(context: ContextTypes.DEFAULT_TYPE):
-    """Her 2 saatte bir çalışacak kontrol fonksiyonu."""
     for chat_id, urunler in list(izlenen_urunler.items()):
         silinecek_urunler = []
         
@@ -105,7 +140,7 @@ async def periyodik_kontrol(context: ContextTypes.DEFAULT_TYPE):
             stokta_mi = trendyol_stok_kontrol(url)
             
             if stokta_mi:
-                mesaj = f"🚨 KOŞ KOŞ KOŞ STOKLARDA!🚨\n\nBeklediğiniz ürün stoklara girdi. Hemen tükenmeden kap!\n👉 [Ürüne Git]({url})"
+                mesaj = f"🚨 HEDEF TESPİT EDİLDİ. KOŞ BAYIL PARANI 🚨\n\nStok aktif. Fırsatı kaçırma, derhal işlemini tamamla.\n👉 [Satın Al]({url})"
                 await context.bot.send_message(chat_id=chat_id, text=mesaj, parse_mode="Markdown")
                 silinecek_urunler.append(uid)
                 
@@ -115,11 +150,10 @@ async def periyodik_kontrol(context: ContextTypes.DEFAULT_TYPE):
 # --- ANA FONKSİYON ---
 
 def main():
-    # Railway'deki Environment Variables kısmında TELEGRAM_BOT_TOKEN tanımlı olmalıdır.
     TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     
     if not TOKEN:
-        logging.error("TELEGRAM_BOT_TOKEN bulunamadı! Lütfen çevre değişkenlerini kontrol edin.")
+        logging.error("TELEGRAM_BOT_TOKEN bulunamadı!")
         return
         
     app = Application.builder().token(TOKEN).build()
@@ -128,11 +162,11 @@ def main():
     app.add_handler(CommandHandler("ekle", ekle))
     app.add_handler(CommandHandler("listem", listem))
     app.add_handler(CommandHandler("listedencikar", listedencikar))
+    app.add_handler(CommandHandler("kontrol", manuel_kontrol)) 
     
-    # interval=7200 saniye (2 Saat) demektir. 
     app.job_queue.run_repeating(periyodik_kontrol, interval=7200, first=10)
     
-    logging.info("Bot başarıyla başlatıldı.")
+    logging.info("Sistem devrede. Veri akışı bekleniyor.")
     app.run_polling()
 
 if __name__ == "__main__":
