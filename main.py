@@ -1,4 +1,4 @@
- import os
+import os
 import logging
 import cloudscraper
 from bs4 import BeautifulSoup
