@@ -1,4 +1,4 @@
-import os
+ import os
 import logging
 import cloudscraper
 from bs4 import BeautifulSoup
@@ -19,21 +19,26 @@ def trendyol_stok_kontrol(url):
     })
     
     try:
-        response = scraper.get(url, timeout=15)
+        # allow_redirects=True ile ty.gl gibi kısa linkleri sonuna kadar takip et
+        response = scraper.get(url, timeout=20, allow_redirects=True)
         
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, 'html.parser')
             
-            buton = soup.find('div', class_='add-to-basket-button-text')
-            if buton and "sepete ekle" in buton.text.lower():
-                return True
+            # Sistem Trendyol güvenlik duvarına takıldıysa loglara yazdır
+            if "Robot Değilim" in soup.text or "challengetitle" in response.text.lower():
+                logging.warning(f"Güvenlik duvarına takıldık! URL: {url}")
+                return False
                 
-            buton_alt = soup.find('button', class_='add-to-basket')
-            if buton_alt and "sepete ekle" in buton_alt.text.lower():
-                return True
-                
+            # Hedefi genişlet: Class isminin içinde 'add-to-basket' geçen tüm elementleri bul
+            butonlar = soup.find_all(class_=lambda c: c and 'add-to-basket' in c.lower())
+            
+            for b in butonlar:
+                if b.text and "sepete ekle" in b.text.lower():
+                    return True
+                    
     except Exception as e:
-        logging.error(f"Stok kontrol hatası: {e}")
+        logging.error(f"Tarama Hatası: {e}")
         
     return False
 
@@ -41,7 +46,7 @@ def trendyol_stok_kontrol(url):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mesaj = (
-        "Sisteme bağlandım. Ben StockFox, arka plandaki gözünüm.\n"
+        "SBen StockFox.\n"
         "Kurallar basit, komutları eksiksiz gir:\n\n"
         "/ekle <link> - Takip edilecek hedefi belirle.\n"
         "/listem - Radarımızdaki hedefleri gör.\n"
@@ -64,7 +69,7 @@ async def ekle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         izlenen_urunler[chat_id] = {}
         
     izlenen_urunler[chat_id][urun_sayaci] = url
-    await update.message.reply_text(f"✅ Hedef listeye eklendi. ID: {urun_sayaci}.\nBen arka planda işimi yaparken sen kendi işine bak. Gelişme olursa haber vereceğim.")
+    await update.message.reply_text(f"✅ Hedef listeye eklendi. ID:{urun_sayaci}.\n bekle bakalım.")
     urun_sayaci += 1
 
 async def listem(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -119,7 +124,7 @@ async def manuel_kontrol(update: Update, context: ContextTypes.DEFAULT_TYPE):
         stokta_mi = trendyol_stok_kontrol(url)
         
         if stokta_mi:
-            mesaj = f"🚨 HEDEF TESPİT EDİLDİ 🚨\n\nStok aktif. Fırsatı kaçırma, koş bayıl paranı.\n👉 [Satın Al]({url})"
+            mesaj = f"🚨 **HEDEF TESPİT EDİLDİ** 🚨\n\nStok aktif. Koş harca paranı saçma şeylere.\n👉 [Satın Al]({url})"
             await context.bot.send_message(chat_id=chat_id, text=mesaj, parse_mode="Markdown")
             silinecek_urunler.append(uid)
             stokta_bulunan += 1
@@ -140,7 +145,7 @@ async def periyodik_kontrol(context: ContextTypes.DEFAULT_TYPE):
             stokta_mi = trendyol_stok_kontrol(url)
             
             if stokta_mi:
-                mesaj = f"🚨 HEDEF TESPİT EDİLDİ. KOŞ BAYIL PARANI 🚨\n\nStok aktif. Fırsatı kaçırma, derhal işlemini tamamla.\n👉 [Satın Al]({url})"
+                mesaj = f"🚨 **HEDEF TESPİT EDİLDİ** 🚨\n\nStok aktif. Koş harca paranı saçma şeylere.\n👉 [Satın Al]({url})"
                 await context.bot.send_message(chat_id=chat_id, text=mesaj, parse_mode="Markdown")
                 silinecek_urunler.append(uid)
                 
