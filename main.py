@@ -1,6 +1,6 @@
 import os
 import logging
-import cloudscraper
+import requests
 from bs4 import BeautifulSoup
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -12,33 +12,32 @@ izlenen_urunler = {}
 urun_sayaci = 1
 
 def trendyol_stok_kontrol(url):
-    scraper = cloudscraper.create_scraper(browser={
-        'browser': 'chrome',
-        'platform': 'windows',
-        'desktop': True
-    })
+    # Sistemi Googlebot olarak maskele. Hedef bizi arama motoru sanacak.
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7"
+    }
     
     try:
-        # allow_redirects=True ile ty.gl gibi kısa linkleri sonuna kadar takip et
-        response = scraper.get(url, timeout=20, allow_redirects=True)
+        response = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
         
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, 'html.parser')
             
-            # Sistem Trendyol güvenlik duvarına takıldıysa loglara yazdır
-            if "Robot Değilim" in soup.text or "challengetitle" in response.text.lower():
-                logging.warning(f"Güvenlik duvarına takıldık! URL: {url}")
-                return False
+            # Taktik 1: Googlebot'a özel sunulan Schema.org stok etiketini oku (En kesin yöntem)
+            availability = soup.find('meta', {'itemprop': 'availability'})
+            if availability and "InStock" in availability.get('href', ''):
+                return True
                 
-            # Hedefi genişlet: Class isminin içinde 'add-to-basket' geçen tüm elementleri bul
+            # Taktik 2: Etiket yoksa klasik kaba kuvvet HTML taraması yap
             butonlar = soup.find_all(class_=lambda c: c and 'add-to-basket' in c.lower())
-            
             for b in butonlar:
                 if b.text and "sepete ekle" in b.text.lower():
                     return True
                     
     except Exception as e:
-        logging.error(f"Tarama Hatası: {e}")
+        logging.error(f"Sızma Başarısız: {e}")
         
     return False
 
@@ -51,7 +50,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/ekle <link> - Takip edilecek hedefi belirle.\n"
         "/listem - Radarımızdaki hedefleri gör.\n"
         "/listedencikar <no> - Gereksiz hedefleri sistemden temizle.\n"
-        "/kontrol - Aciliyet durumunda manuel tarama başlat."
+        "/kontrol - Aciliyet durumunda manuel tarama başlat.\n"
+        "/rapor <link> - Hedef sayfanın arka plan analizini bana raporla."
     )
     await update.message.reply_text(mesaj)
 
@@ -104,6 +104,44 @@ async def listedencikar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"🗑️ ID {uid} sistemden kalıcı olarak silindi.")
     else:
         await update.message.reply_text("Böyle bir ID sistemde yok. Verilerini kontrol edip tekrar dene.")
+
+async def rapor(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Eksik parametre. Raporlanacak linki ver. Örnek: `/rapor https://...`")
+        return
+        
+    url = context.args[0]
+    await update.message.reply_text("📡 Hedefte derin tarama başlatıldı. Bekle...")
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+        "Accept-Language": "tr-TR,tr;q=0.9"
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
+        status = response.status_code
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        availability = soup.find('meta', {'itemprop': 'availability'})
+        stok_durumu = availability.get('href', 'Bulunamadı') if availability else 'Etiket Yok'
+        
+        buton_text = "Bulunamadı"
+        buton = soup.find(class_=lambda c: c and 'add-to-basket' in c.lower())
+        if buton:
+            buton_text = buton.text.strip()
+            
+        rapor_mesaji = (
+            f"📄 **SİSTEM İSTİHBARAT RAPORU**\n\n"
+            f"**HTTP Dönüş Kodu:** `{status}` (200 ise erişim temiz)\n"
+            f"**Googlebot Stok Etiketi:** `{stok_durumu}`\n"
+            f"**HTML Buton İçeriği:** `{buton_text}`\n"
+            f"**Metin Analizi:** Sayfada 'Sepete Ekle' kelimesi `{response.text.lower().count('sepete ekle')}` kez geçiyor."
+        )
+        await update.message.reply_text(rapor_mesaji, parse_mode="Markdown")
+        
+    except Exception as e:
+        await update.message.reply_text(f"HATA: Hedefe ulaşılamadı. Sebep: {e}")
 
 # --- MANUEL KONTROL KOMUTU ---
 
@@ -168,6 +206,7 @@ def main():
     app.add_handler(CommandHandler("listem", listem))
     app.add_handler(CommandHandler("listedencikar", listedencikar))
     app.add_handler(CommandHandler("kontrol", manuel_kontrol)) 
+    app.add_handler(CommandHandler("rapor", rapor)) 
     
     app.job_queue.run_repeating(periyodik_kontrol, interval=7200, first=10)
     
