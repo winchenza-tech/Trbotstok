@@ -12,7 +12,6 @@ izlenen_urunler = {}
 urun_sayaci = 1
 
 def trendyol_stok_kontrol(url):
-    # Sistemi Googlebot olarak maskele. Hedef bizi arama motoru sanacak.
     headers = {
         "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -25,17 +24,22 @@ def trendyol_stok_kontrol(url):
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, 'html.parser')
             
-            # Taktik 1: Googlebot'a özel sunulan Schema.org stok etiketini oku (En kesin yöntem)
+            # Taktik 1: Googlebot Etiketini Kontrol Et
             availability = soup.find('meta', {'itemprop': 'availability'})
             if availability and "InStock" in availability.get('href', ''):
                 return True
                 
-            # Taktik 2: Etiket yoksa klasik kaba kuvvet HTML taraması yap
-            butonlar = soup.find_all(class_=lambda c: c and 'add-to-basket' in c.lower())
-            for b in butonlar:
-                if b.text and "sepete ekle" in b.text.lower():
+            # Taktik 2: Sınıf isimlerini boşver, doğrudan HTML elementlerinin içindeki metne odaklan.
+            elementler = soup.find_all(['button', 'div', 'span', 'a'])
+            for el in elementler:
+                metin = el.get_text(strip=True).lower()
+                if metin == "sepete ekle":
                     return True
                     
+            # Taktik 3: Trendyol'un arka plan veri tabanını (JSON) ham metin olarak tara
+            if '"isSoldOut":false' in response.text or '"inStock":true' in response.text:
+                return True
+                
     except Exception as e:
         logging.error(f"Sızma Başarısız: {e}")
         
